@@ -7,7 +7,8 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:5000', 'https://market-hypothesis-lab-backend.onrender.com',
+        // Use deployed Render backend (or switch to 'http://localhost:5000' for local dev)
+        target: 'https://market-hypothesis-lab-backend.onrender.com',
         changeOrigin: true,
       },
     },
