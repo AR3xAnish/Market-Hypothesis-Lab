@@ -253,3 +253,9 @@ Open your browser at `http://localhost:5173`.
    - Allow combining conditions (e.g., drop $\le -2\%$ *AND* RSI $< 30$ *OR* price below 200-day moving average).
 5. **Monte Carlo Robustness & Walk-Forward Optimization**:
    - Simulate parameter sensitivity heatmaps across varying drop thresholds (-1% to -4%) and holding durations (1 to 20 days) to diagnose overfitting.
+
+---
+
+## 🤖 AI Usage Note
+
+For a detailed and transparent breakdown of how AI tools and assistants were leveraged across architecture, data modeling, quantitative logic, and deployment troubleshooting, please refer to [AI_USAGE.md](AI_USAGE.md).
