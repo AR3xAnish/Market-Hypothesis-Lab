@@ -81,6 +81,9 @@ To avoid silent assumptions, the system explicitly requires confirming five para
    - Spans over 5,200 trading sessions, ensuring the strategy is tested across both high-volatility crashes and sustained bull markets.
 6. **Transaction Costs & Slippage (Toggle, Default `Off / 0.0%`)**:
    - Off by default for pure statistical evaluation; toggling on subtracts 0.1% flat round-trip costs from every trade.
+7. **Overlapping Signal Suppression (Non-Overlapping Windows)**:
+   - **Overlapping signals suppressed — once a position opens, no new signal is registered until the prior holding period ends.**
+   - *Methodology Note*: This was a deliberate methodology choice to avoid double-counting clustered crash events (e.g. multiple sharp-fall days within the same crash episode like October 2008 or March 2020). After a signal on Day $T$, the next earliest possible signal is Day $T + \text{holding\_period\_days}$.
 
 ---
 
@@ -119,34 +122,51 @@ CREATE TABLE results (
 );
 ```
 
-### Backtest Window Function Logic
+### Backtest Window Function Logic (Recursive CTE Non-Overlapping Engine)
 ```sql
-WITH price_window AS (
+WITH RECURSIVE
+indexed_data AS (
   SELECT
+    ROW_NUMBER() OVER (ORDER BY date) AS row_num,
     date,
     open,
     close,
     LAG(close, 1) OVER (ORDER BY date) AS prev_close,
-    ((close - LAG(close, 1) OVER (ORDER BY date)) / LAG(close, 1) OVER (ORDER BY date) * 100.0) AS daily_return_pct,
+    ROUND(((close - LAG(close, 1) OVER (ORDER BY date)) / LAG(close, 1) OVER (ORDER BY date) * 100.0)::numeric, 4) AS daily_return_pct,
     LEAD(open, 1) OVER (ORDER BY date) AS entry_open,
     LEAD(close, $holding_period) OVER (ORDER BY date) AS exit_close
   FROM nifty_prices
   WHERE date >= $start_date AND date <= $end_date
 ),
-trades AS (
+valid_rows AS (
   SELECT
-    *,
-    ((exit_close - entry_open) / entry_open * 100.0) - (CASE WHEN $include_costs THEN 0.1 ELSE 0.0 END) AS forward_return_pct
-  FROM price_window
-  WHERE entry_open IS NOT NULL AND exit_close IS NOT NULL
+    row_num,
+    date AS signal_date,
+    daily_return_pct,
+    ROUND((((exit_close - entry_open) / entry_open * 100.0) - (CASE WHEN $include_costs THEN 0.1 ELSE 0.0 END))::numeric, 4) AS forward_return_pct
+  FROM indexed_data
+  WHERE prev_close IS NOT NULL AND entry_open IS NOT NULL AND exit_close IS NOT NULL
+),
+raw_signals AS (
+  SELECT * FROM valid_rows WHERE daily_return_pct <= $threshold
+),
+non_overlapping AS (
+  (SELECT * FROM raw_signals ORDER BY row_num ASC LIMIT 1)
+  UNION ALL
+  SELECT next_sig.*
+  FROM non_overlapping curr
+  CROSS JOIN LATERAL (
+    SELECT * FROM raw_signals s
+    WHERE s.row_num >= curr.row_num + $holding_period
+    ORDER BY s.row_num ASC LIMIT 1
+  ) next_sig
 )
 SELECT
-  COUNT(*) FILTER (WHERE daily_return_pct <= $threshold) AS num_signals,
-  AVG(forward_return_pct) FILTER (WHERE daily_return_pct <= $threshold) AS avg_forward_return,
-  AVG(forward_return_pct) AS baseline_avg_return,
-  COUNT(*) FILTER (WHERE daily_return_pct <= $threshold AND forward_return_pct > 0)::numeric /
-    NULLIF(COUNT(*) FILTER (WHERE daily_return_pct <= $threshold), 0) * 100.0 AS hit_rate
-FROM trades;
+  COUNT(*) AS num_signals,
+  ROUND(AVG(forward_return_pct)::numeric, 4) AS avg_forward_return,
+  (SELECT ROUND(AVG(forward_return_pct)::numeric, 4) FROM valid_rows) AS baseline_avg_return,
+  ROUND((COUNT(*) FILTER (WHERE forward_return_pct > 0)::numeric / NULLIF(COUNT(*), 0) * 100.0)::numeric, 2) AS hit_rate
+FROM non_overlapping;
 ```
 
 ---

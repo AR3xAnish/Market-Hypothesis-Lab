@@ -61,6 +61,16 @@ function synthesizeConclusions({
       text: 'A quantitative correlation in historical price records does not establish causal predictability. Market regimes, liquidity structures, and macroeconomic factors evolve continuously.',
       severity: 'medium',
     },
+    {
+      title: 'Definition Sensitivity',
+      text: `This result depends entirely on the specific definition of 'sharp fall' used here (a single-day decline of -${absThreshold}% or more). A different threshold, a multi-day cumulative definition, or a volatility-adjusted definition could produce a materially different — or even opposite — conclusion. This is one reasonable interpretation among several, not the definition.`,
+      severity: 'medium',
+    },
+    {
+      title: 'Data Quality & Source',
+      text: "Index constituents and weighting have changed over the test period, so today's NIFTY does not perfectly represent the index at each historical point in time. Note on data source: Synthetic daily OHLC price series calibrated against historical 2005–2025 regimes (including the 2008 and 2020 crash episodes) used for demonstration purposes.",
+      severity: 'medium',
+    },
   ];
 
   // 2-3 suggested follow-up questions
@@ -163,14 +173,17 @@ router.post('/run', async (req, res) => {
       return res.status(400).json({ error: 'Invalid threshold or holding period' });
     }
 
-    // 1. Run backtest using raw SQL window functions
+    // 1. Run backtest using raw SQL recursive CTE window functions
     // Window functions:
     // - LAG(close, 1) to determine signal day drop
     // - LEAD(open, 1) to determine next day open (no look-ahead bias)
     // - LEAD(close, holdingDays) to determine exit price
+    // - Non-overlapping suppression: once a signal triggers on day T, no new signal is registered until day T + holdingDays
     const backtestQuery = `
-      WITH price_window AS (
+      WITH RECURSIVE
+      indexed_data AS (
         SELECT
+          ROW_NUMBER() OVER (ORDER BY date) AS row_num,
           date,
           open,
           high,
@@ -185,11 +198,10 @@ router.post('/run', async (req, res) => {
         FROM nifty_prices
         WHERE date >= $2::date AND date <= $3::date
       ),
-      valid_trades AS (
+      valid_rows AS (
         SELECT
+          row_num,
           date AS signal_date,
-          open AS signal_open,
-          close AS signal_close,
           daily_return_pct,
           entry_date,
           entry_open,
@@ -199,23 +211,44 @@ router.post('/run', async (req, res) => {
             (((exit_close - entry_open) / entry_open * 100.0) - (CASE WHEN $4::boolean THEN 0.1 ELSE 0.0 END))::numeric,
             4
           ) AS forward_return_pct
-        FROM price_window
+        FROM indexed_data
         WHERE prev_close IS NOT NULL 
           AND entry_open IS NOT NULL 
           AND exit_close IS NOT NULL
+      ),
+      raw_signals AS (
+        SELECT * FROM valid_rows WHERE daily_return_pct <= $5::numeric
+      ),
+      non_overlapping AS (
+        (
+          SELECT *
+          FROM raw_signals
+          ORDER BY row_num ASC
+          LIMIT 1
+        )
+        UNION ALL
+        SELECT next_sig.*
+        FROM non_overlapping curr
+        CROSS JOIN LATERAL (
+          SELECT *
+          FROM raw_signals s
+          WHERE s.row_num >= curr.row_num + $1::int
+          ORDER BY s.row_num ASC
+          LIMIT 1
+        ) next_sig
       )
       SELECT
-        COUNT(*) AS total_sample_days,
-        ROUND(AVG(forward_return_pct)::numeric, 4) AS baseline_avg_return,
-        COUNT(*) FILTER (WHERE daily_return_pct <= $5::numeric) AS num_signals,
-        ROUND(AVG(forward_return_pct) FILTER (WHERE daily_return_pct <= $5::numeric)::numeric, 4) AS avg_forward_return,
-        ROUND((
-          COUNT(*) FILTER (WHERE daily_return_pct <= $5::numeric AND forward_return_pct > 0)::numeric / 
-          NULLIF(COUNT(*) FILTER (WHERE daily_return_pct <= $5::numeric), 0) * 100.0
-        )::numeric, 2) AS hit_rate,
-        COUNT(*) FILTER (WHERE daily_return_pct <= $5::numeric AND forward_return_pct > 0) AS winning_trades,
-        COUNT(*) FILTER (WHERE daily_return_pct <= $5::numeric AND forward_return_pct <= 0) AS losing_trades
-      FROM valid_trades;
+        (SELECT COUNT(*) FROM valid_rows) AS total_sample_days,
+        (SELECT ROUND(AVG(forward_return_pct)::numeric, 4) FROM valid_rows) AS baseline_avg_return,
+        COUNT(*) AS num_signals,
+        COALESCE(ROUND(AVG(forward_return_pct)::numeric, 4), 0) AS avg_forward_return,
+        COALESCE(ROUND((
+          COUNT(*) FILTER (WHERE forward_return_pct > 0)::numeric / 
+          NULLIF(COUNT(*), 0) * 100.0
+        )::numeric, 2), 0) AS hit_rate,
+        COUNT(*) FILTER (WHERE forward_return_pct > 0) AS winning_trades,
+        COUNT(*) FILTER (WHERE forward_return_pct <= 0) AS losing_trades
+      FROM non_overlapping;
     `;
 
     const summaryResult = await client.query(backtestQuery, [
@@ -235,10 +268,12 @@ router.post('/run', async (req, res) => {
     const winningTrades = parseInt(stats.winning_trades || '0', 10);
     const losingTrades = parseInt(stats.losing_trades || '0', 10);
 
-    // 2. Fetch all signal trades for charting and table review
+    // 2. Fetch all non-overlapping signal trades for charting and table review
     const tradesQuery = `
-      WITH price_window AS (
+      WITH RECURSIVE
+      indexed_data AS (
         SELECT
+          ROW_NUMBER() OVER (ORDER BY date) AS row_num,
           date,
           open,
           close,
@@ -250,24 +285,56 @@ router.post('/run', async (req, res) => {
           LEAD(date, $1::int) OVER (ORDER BY date) AS exit_date
         FROM nifty_prices
         WHERE date >= $2::date AND date <= $3::date
+      ),
+      valid_rows AS (
+        SELECT
+          row_num,
+          date AS signal_date,
+          daily_return_pct,
+          entry_date,
+          entry_open,
+          exit_date,
+          exit_close,
+          ROUND(
+            (((exit_close - entry_open) / entry_open * 100.0) - (CASE WHEN $4::boolean THEN 0.1 ELSE 0.0 END))::numeric,
+            2
+          ) AS forward_return_pct
+        FROM indexed_data
+        WHERE prev_close IS NOT NULL 
+          AND entry_open IS NOT NULL 
+          AND exit_close IS NOT NULL
+      ),
+      raw_signals AS (
+        SELECT * FROM valid_rows WHERE daily_return_pct <= $5::numeric
+      ),
+      non_overlapping AS (
+        (
+          SELECT *
+          FROM raw_signals
+          ORDER BY row_num ASC
+          LIMIT 1
+        )
+        UNION ALL
+        SELECT next_sig.*
+        FROM non_overlapping curr
+        CROSS JOIN LATERAL (
+          SELECT *
+          FROM raw_signals s
+          WHERE s.row_num >= curr.row_num + $1::int
+          ORDER BY s.row_num ASC
+          LIMIT 1
+        ) next_sig
       )
       SELECT
-        date::text AS signal_date,
+        signal_date::text,
         daily_return_pct,
         entry_date::text,
         entry_open,
         exit_date::text,
         exit_close,
-        ROUND(
-          (((exit_close - entry_open) / entry_open * 100.0) - (CASE WHEN $4::boolean THEN 0.1 ELSE 0.0 END))::numeric,
-          2
-        ) AS forward_return_pct
-      FROM price_window
-      WHERE prev_close IS NOT NULL 
-        AND entry_open IS NOT NULL 
-        AND exit_close IS NOT NULL
-        AND daily_return_pct <= $5::numeric
-      ORDER BY date ASC;
+        forward_return_pct
+      FROM non_overlapping
+      ORDER BY row_num ASC;
     `;
 
     const tradesResult = await client.query(tradesQuery, [

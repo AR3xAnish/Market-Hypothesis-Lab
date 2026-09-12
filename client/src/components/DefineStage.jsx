@@ -101,6 +101,16 @@ export default function DefineStage({
           </div>
         </div>
 
+        {/* Signal De-duplication Filter Note */}
+        <div className="bg-slate-950/60 border border-slate-800 rounded-xl px-4 py-2.5 mb-6 flex items-center space-x-2.5 text-xs font-mono text-slate-300">
+          <span className="text-cyan-400 font-semibold uppercase text-[10px] px-2 py-0.5 rounded bg-cyan-950/80 border border-cyan-800/70 shrink-0">
+            Signal Filter
+          </span>
+          <span className="text-slate-400">
+            Overlapping signals suppressed — once a position opens, no new signal is registered until the prior holding period ends.
+          </span>
+        </div>
+
         {/* Hypothesis Statement Box */}
         <div className="bg-gradient-to-r from-cyan-950/40 via-indigo-950/30 to-slate-900 border border-cyan-800/40 rounded-xl p-5 mb-6 relative">
           <div className="flex items-center space-x-2 text-xs font-semibold text-cyan-400 uppercase tracking-wider mb-2">
