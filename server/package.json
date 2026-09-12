@@ -1,0 +1,19 @@
+{
+  "name": "market-hypothesis-lab-server",
+  "version": "1.0.0",
+  "description": "Backend server and backtest engine for Market Hypothesis Lab",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js",
+    "seed": "node db/seed.js",
+    "test:backtest": "node test_backtest.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "csv-parser": "^3.2.0",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "pg": "^8.13.1"
+  }
+}
