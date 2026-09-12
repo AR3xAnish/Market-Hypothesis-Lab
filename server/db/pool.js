@@ -2,10 +2,13 @@ const { Pool } = require('pg');
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
-const poolConfig = process.env.DATABASE_URL
+// Check for connection string in DATABASE_URL or accidentally in PGHOST
+const rawConn = process.env.DATABASE_URL || (process.env.PGHOST && process.env.PGHOST.startsWith('postgres') ? process.env.PGHOST : null);
+
+const poolConfig = rawConn
   ? {
-      connectionString: process.env.DATABASE_URL,
-      ssl: process.env.DATABASE_URL.includes('localhost')
+      connectionString: rawConn,
+      ssl: rawConn.includes('localhost')
         ? false
         : { rejectUnauthorized: false },
     }

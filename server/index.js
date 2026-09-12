@@ -35,9 +35,38 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
+// Manual seed endpoint (useful for initial cloud setup or reset)
+app.post('/api/admin/seed', async (req, res) => {
+  try {
+    const seed = require('./db/seed');
+    await seed(false);
+    res.json({ status: 'ok', message: 'Database seeded successfully' });
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
+// Auto-initialize schema & seed data if tables are missing
+async function initDb() {
+  try {
+    const tableCheck = await pool.query(`
+      SELECT to_regclass('public.nifty_prices') AS table_exists;
+    `);
+    if (!tableCheck.rows[0].table_exists) {
+      console.log('⚡ Table nifty_prices not found. Running auto-initialization & seed...');
+      const seed = require('./db/seed');
+      await seed(false);
+      console.log('✅ Auto-seed completed successfully!');
+    }
+  } catch (err) {
+    console.error('Database auto-init notice:', err.message);
+  }
+}
+
 // Start listening
-const server = app.listen(PORT, () => {
+const server = app.listen(PORT, async () => {
   console.log(`📡 Market Hypothesis Lab backend listening on http://localhost:${PORT}`);
+  await initDb();
 });
 
 module.exports = { app, server };

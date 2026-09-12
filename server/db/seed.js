@@ -3,7 +3,7 @@ const path = require('path');
 const readline = require('readline');
 const pool = require('./pool');
 
-async function seed() {
+async function seed(shouldClosePool = true) {
   const client = await pool.connect();
   try {
     console.log('🚀 Starting database seed...');
@@ -15,9 +15,16 @@ async function seed() {
     console.log('✅ Schema tables verified/created.');
 
     // 2. Parse CSV and batch insert into nifty_prices
-    const csvPath = path.join(__dirname, '..', '..', 'data', 'nifty.csv');
-    if (!fs.existsSync(csvPath)) {
-      throw new Error(`CSV file not found at ${csvPath}`);
+    const candidatePaths = [
+      path.join(__dirname, '..', 'data', 'nifty.csv'),
+      path.join(__dirname, '..', 'nifty.csv'),
+      path.join(__dirname, '..', '..', 'data', 'nifty.csv'),
+      path.join(process.cwd(), 'data', 'nifty.csv'),
+      path.join(process.cwd(), 'server', 'data', 'nifty.csv'),
+    ];
+    const csvPath = candidatePaths.find((p) => fs.existsSync(p));
+    if (!csvPath) {
+      throw new Error(`CSV file not found in any expected location: ${candidatePaths.join(', ')}`);
     }
 
     const fileStream = fs.createReadStream(csvPath);
@@ -104,15 +111,18 @@ async function seed() {
     `);
   } catch (err) {
     console.error('❌ Seeding failed:', err);
-    process.exit(1);
+    if (shouldClosePool) process.exit(1);
+    throw err;
   } finally {
     client.release();
-    await pool.end();
+    if (shouldClosePool) {
+      await pool.end();
+    }
   }
 }
 
 if (require.main === module) {
-  seed();
+  seed(true);
 }
 
 module.exports = seed;

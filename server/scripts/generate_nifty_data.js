@@ -132,7 +132,11 @@ function generateNiftyData() {
     currentDate.setDate(currentDate.getDate() + 1);
   }
 
-  const outPath = path.join(__dirname, '..', 'data', 'nifty.csv');
+  const outDir = path.join(__dirname, '..', 'data');
+  if (!fs.existsSync(outDir)) {
+    fs.mkdirSync(outDir, { recursive: true });
+  }
+  const outPath = path.join(outDir, 'nifty.csv');
   fs.writeFileSync(outPath, rows.join('\n'), 'utf8');
   console.log(`Generated ${rows.length - 1} daily price records in ${outPath}`);
 }
