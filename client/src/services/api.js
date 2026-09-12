@@ -1,4 +1,7 @@
-const BASE_URL = '/api';
+const API_HOST = import.meta.env.VITE_API_URL || '';
+const BASE_URL = API_HOST.endsWith('/api')
+  ? API_HOST
+  : `${API_HOST.replace(/\/$/, '')}/api`;
 
 export async function fetchDefaults() {
   const res = await fetch(`${BASE_URL}/questions/defaults`);
